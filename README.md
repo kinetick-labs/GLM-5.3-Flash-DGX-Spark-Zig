@@ -173,12 +173,52 @@ boot while the page cache drains).
 
 ## Credits
 
-- **TensorFold**: ashhart and contributors (upstream ashhart/TensorFold, Apache-2.0): the native engine, the GLM
-  family and EXL3 kernels this branch builds on.
-- **vcruz305**: the SAGE REXL3 2.48 bpw pack. **Z.AI** (zai-org): GLM-5.3-Flash. **incoai** / z-lab: DFlash2 drafts.
-- **Jay Leaton** (jayleaton): the compute lane and in-model runner in our `main` (jayleaton/qwen4-tensorfold-spark,
-  Apache-2.0) and the upstream strict-tool / grammar work our grammar hooks follow.
-- **MiaAI-Lab**: the mia engine and layer-sliced prefill in our `main` (used by our Qwen recipe, not by GLM). No
-  MiaAI-Lab recipe is used as a base here.
-- **Kinetick-labs** (tournierjc): GLM-5.3 REXL3 serving on one Spark (FP8 prompt experts, live-half kept states,
-  paged-KV conversation reuse, think-close and short-prompt knobs, boot retry), the benches and this recipe.
+Only what this recipe actually runs is listed; TensorFold's
+[THIRD_PARTY_NOTICES.md](https://github.com/kinetick-labs/TensorFold/blob/feat/glm53-rexl3/THIRD_PARTY_NOTICES.md) has
+the full attributions of the engine.
+
+**Models**
+- **Z.AI** ([zai-org](https://huggingface.co/zai-org)): the base model,
+  [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash).
+- **vcruz305** ([HF](https://huggingface.co/vcruz305), [GitHub](https://github.com/vcruz305)): the SAGE REXL3 2.48 bpw
+  pack this recipe serves ([vcruz305/GLM-5.3-Flash-SAGE-REXL3-2.48bpw](https://huggingface.co/vcruz305/GLM-5.3-Flash-SAGE-REXL3-2.48bpw)).
+- **Inco AI** ([incoai](https://huggingface.co/incoai), [blog](https://inco.ai/blog/dflash2/)): the DFlash2 drafter
+  ([incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)).
+- **z-lab** (Jian Chen, Yesheng Liang, Zhijian Liu; [z-lab/dflash](https://github.com/z-lab/dflash), MIT): the DFlash
+  block-diffusion drafter architecture TensorFold's native drafter implements.
+
+**Engine and formats**
+- **TensorFold**: [ashhart](https://github.com/ashhart) and [contributors](https://github.com/ashhart/TensorFold/graphs/contributors)
+  ([ashhart/TensorFold](https://github.com/ashhart/TensorFold) v1.2.8 `d6c4cce60`, Apache-2.0): the native Zig/CUDA
+  engine. The CUDA GLM family is mostly by ashhart, [Bizuayeu](https://github.com/Bizuayeu) and
+  [BobClawblaw](https://github.com/BobClawblaw), with others (git history); the CUDA EXL3 linear and grouped expert
+  kernels started with Justin Casey's work and were extended by ashhart, Anders Jensen-Waud and others.
+- **turboderp** ([ExLlamaV3](https://github.com/turboderp-org/exllamav3), MIT): the EXL3 format (trellis layout,
+  codebooks, bit widths) that REXL3 packs use; TensorFold's EXL3 decoders and kernels implement it, checked against
+  ExLlamaV3.
+- **MiaAI-Lab** ([GitHub](https://github.com/MiaAI-Lab)): upstream's GLM EXL3 routed-expert path (BobClawblaw,
+  `9a9cda815`) was first written for MiaAI-Lab's 4-bit GLM-5.3-Flash EXL3 checkpoint; our REXL3 support extends that
+  path to mixed widths. No MiaAI-Lab recipe is used as a base here, and their mia engine and layer-sliced prefill
+  (in our `main`) are used by our Qwen recipe, not by GLM.
+- **flash-linear-attention** ([fla-org](https://github.com/fla-org/flash-linear-attention), MIT): our KDA prompt
+  chunks on tf32 tensor cores (`TF_GLM_KDA_CHUNK`) follow its `chunk_kda`.
+- **mlx-vlm** (Prince Canuma, [Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm), MIT): upstream's GLM image tower
+  follows its `glm5_next` vision code.
+- **Jay Leaton** ([jayleaton](https://github.com/jayleaton)): his compute lane and in-model runner
+  ([jayleaton/qwen4-tensorfold-spark](https://github.com/jayleaton/qwen4-tensorfold-spark), Apache-2.0) are in this
+  build through our `main` (off in this serve config), and his strict-tool work under `tool_choice: auto` is in the
+  server.
+
+**Runtime image** (shared with our Qwen recipe)
+- **NVIDIA**: the [PyTorch 26.07 container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) (CUDA 13
+  libraries; the only part of the image GLM uses). **Triton** ([triton-lang](https://github.com/triton-lang/triton),
+  MIT) compiles the Qwen kernel set the image carries.
+- `image/python-overlay.patch` (Qwen vision helper and FP8 KV kernels, not run by GLM) keeps MiaAI-Lab's attributions:
+  the helper's request limits follow their single-Spark recipe's patches 0008 and 0009, and the FP8 KV rows follow
+  their row format (patch 0038).
+- Image input decodes in libjpeg-turbo (`libturbojpeg`) and libwebp (`libwebpdecoder`).
+
+**This recipe**
+- **Kinetick-labs** ([tournierjc](https://github.com/tournierjc)): GLM-5.3 REXL3 serving on one Spark (mixed-width
+  REXL3 admission, FP8 prompt experts, KDA/MLA prompt kernels, live-half kept states, paged-KV conversation reuse,
+  think-close and short-prompt knobs, boot retry), the image build, the benches and this recipe.
