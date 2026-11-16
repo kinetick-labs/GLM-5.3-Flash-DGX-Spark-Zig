@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT=${ROOT:-$HOME/tf-glm53-serve}
 NAME=${CONTAINER_NAME:-glm53}
 PORT=${PORT:-8094}
-IMAGE=${IMAGE:-tensorfold-zig:exl3-572414d}   # runtime only (CUDA 13 libs); the binary comes from $ROOT/bin
+IMAGE=${IMAGE:-tensorfold-zig:runtime-pt2607}   # scripts/build-image.sh (CUDA 13 runtime); the binary comes from $ROOT/bin
 MODEL=${MODEL:-$HOME/models/GLM-5.3-Flash-SAGE-REXL3-2.48bpw}
 DFLASH=${DFLASH:-$HOME/models/glm53-dflash2}
 KV_SHARE=${KV_SHARE:-4}                       # kept conversation states (2: ~0.4 GiB more memory margin)
@@ -36,7 +36,7 @@ CMD=(docker run -d --name "$NAME" --gpus all --ipc=host --network host
      --context 262144 --parallel 2 --max-tokens 8192 --prompt-cache-gib 1
      --vision --drafter /dflash)
 if [[ "${DRY_RUN:-0}" == 1 ]]; then printf '%q ' "${CMD[@]}"; echo; exit 0; fi
-docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "serve.sh: missing image $IMAGE" >&2; exit 1; }
+docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "serve.sh: missing image $IMAGE (scripts/build-image.sh)" >&2; exit 1; }
 # Right after another server stops, the KV budget can come up a few tens of MiB short of one 262,144-token
 # window ("budget fits no stream") while the page cache drains: such a refusal is retried up to 3 times, 20 s apart.
 for try in 1 2 3; do

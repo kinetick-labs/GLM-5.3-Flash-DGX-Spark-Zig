@@ -43,6 +43,48 @@ not evict a long conversation's kept states; default 0), `KV_SHARE=2` in serve.s
 - **Memory**: MemAvailable low 3,971 MiB (4 x 28k conversations), **3,528 MiB** (a 120k turn pair then two concurrent
   247k fills). With `KV_SHARE=2`: low 4,360 MiB.
 
+### Concurrency (c1–c4)
+
+The server runs `--parallel 2`, so a 3rd or 4th request waits for a free stream. Only measured numbers are shown;
+"not measured" means no run exists for that cell.
+
+| streams | prefill | decode (DFlash2, temperature 0) |
+|---|---|---|
+| c1 | 968 tok/s (2.9k), 1,009 (14k), 984 (64k), 1,026 (120k) | prose 29.9 (30.7 on a 25-token prompt), code 49.1, math 54.3, JSON 63.2, French 33.6 tok/s |
+| c2 | 2 x ~130k: 971 / 484 tok/s a stream (the second prompt fills after the first, ~950 combined); 2 x ~247k: TTFT 246.8 / 495.2 s, **~1,000 tok/s combined** | 2 short prose streams: 27.0 / 27.6 tok/s; a stream decodes ~1.2 tok/s while the other fills a long prompt |
+| c3 | not measured | not measured |
+| c4 | not measured | not measured |
+
+Builds: c1 prefill at 2.9k/14k/120k and the 2 x 247k run on `72d1c64c2` (FP8 experts, 2026-11-16, windows 29–30).
+The 64k and 2 x 130k fills and the short-prompt decode ran on `c18970d85` (f16 experts, 2026-11-16, window 25). The
+1.2 tok/s figure comes from windows 26–28.
+
+### Agent jobs (Mercury, 2026-11-16)
+
+In a test window, our Mercury bots ran against GLM in place of Qwen:
+
+| job | GLM | Qwen (prod) |
+|---|---|---|
+| `veille-colombages` weekly run | 90.2 min, 2.14M tokens in / 45.8k out, 64 steps, 72 tool calls | 65 min (2026-11-13), 3.08M / 79k, 67 steps, 78 tool calls |
+| `veille-dgx` daily run | 151.6 s, 24.4k / 1.4k, 4 steps, 3 tool calls | 125–127 s (2026-11-14 / 15) |
+
+The 90 min run predates the fixes.
+
+- **Cause of the slow run:** each step, Mercury's compaction rewrote an early tool result, so GLM resumed only at the
+  4096-token system mark. On ~51k-token prompts, that cost ~50 s of TTFT a step.
+- **Replay of that run** (30 steps + 12 vision requests):
+
+  | config | mean TTFT a step | prompt tokens served from cache |
+  |---|---|---|
+  | before the fix | 26.5 s | 25 % |
+  | `TF_KV_SHARE=4` alone | 26.2 s | 26 % |
+  | with Mercury compaction hysteresis | **12.0 s** | **84 %** |
+
+  The hysteresis moves the stub boundary only every 8 tool results; it is a Mercury fix, not a server change.
+- **Status:** a full weekly run with the fix has not been done on GLM yet.
+- **`veille-dgx`:** its 5–7k prompts were not reused in that run, because the test set `TF_KV_SHARE_MIN_PROMPT=8192`
+  (the default is now 0). Reuse also resumes at 2048 marks only; see Known limits.
+
 ## 1. Checkpoint and drafter
 
 ```bash
@@ -63,10 +105,37 @@ Builds `feat/glm53-rexl3` @ `2f01cde2e` ReleaseFast (Zig 0.17, CUDA nvcc, sm_121
 (Linux aarch64) in `$ROOT/libs`: take it from a TensorFold release (pinned grammar runtime) or build it with
 `zig build grammar -Dxgrammar=DIR`; `libturbojpeg` / `libwebpdecoder` there serve image input.
 
-Runtime image: any aarch64 image with the CUDA 13 runtime libraries; we use our local `tensorfold-zig:exl3-572414d`
-(the same runtime as our Qwen recipe). Set `IMAGE=` to yours.
 
-## 3. Serve
+## 3. Runtime image
+
+serve.sh runs `tensorfold-native` (step 2, mounted from `$ROOT`) inside a local runtime image. Build it once, no GPU
+needed:
+
+```bash
+scripts/build-image.sh        # -> tensorfold-zig:runtime-pt2607 (image/Dockerfile); IMAGE=<tag> JOBS=<n> to override
+```
+
+The image (`image/Dockerfile`, multi-stage) is the same runtime as our Qwen recipe:
+
+- **Base:** `nvcr.io/nvidia/pytorch:26.07-py3`, pinned by digest. It provides the CUDA 13 libraries the binary loads,
+  and that is all GLM uses from the image. The 36.5 GB base is pulled once; after that the build takes under a minute
+  on a Spark.
+- **Qwen runtime parts:** the image also carries the Python package of the Qwen vision helper and the sm_121 Triton
+  kernel set that Qwen's mia engine replays. GLM serves vision in-engine (`--vision`) and uses neither.
+  - Python package: upstream ashhart/TensorFold `4af95036e` plus `image/python-overlay.patch`, with transformers
+    5.17.0 and PyAV 19.0.1.
+  - Kernel set: compiled without a GPU from the TensorFold `082aee98a` spec, every cubin checked against
+    `image/sm121-kernels.txt`.
+
+Checked on our Spark (2026-11-16) against the local image we served GLM with until now (`tensorfold-zig:exl3-572414d`):
+
+- **Identical:** the kernel set (all 320 cubins and `aot.json`, byte for byte) and `pip freeze`. With a binary built from
+  `72d1c64c2` (same engine code as the pin), `ldd` resolves the same libraries and none are missing.
+- **Difference:** one comment line in the Python tree.
+
+`IMAGE=` selects another tag.
+
+## 4. Serve
 
 ```bash
 scripts/serve.sh              # docker container glm53 on :8094 (OpenAI-compatible, model name GLM-5.3-Flash)
