@@ -79,3 +79,35 @@ Replay of the weekly run (30 bot steps + 12 vision requests, same prompts):
 | base | 794.7 s | 26.5 s | 196,608 / 798,411 | 12 local, max 273 s, 0 errors |
 | `TF_KV_SHARE=4` | 787.0 s | 26.2 s | 210,944 / 798,411 | 12 local, max 297 s, 0 errors |
 | + Mercury compaction hysteresis (stub boundary moves every 8 results) | 361.2 s | **12.0 s** | 882,688 / 1,046,901 (84 %) | 12 local, max 255 s, 0 errors |
+
+## After the rebase onto upstream v1.3.1, at the new 2100 MHz clock cap (2026-11-20)
+
+The Spark's SM clock is capped at 2100 MHz now (it reports 3003 MHz as `clocks.max.sm`, 2080–2093 MHz
+observed under load), so these numbers are **not** comparable to the 16 Nov ones above: prefill loses
+about 9 % from the clock alone. To separate the rebase from the clock, both pins were built and served
+with the same `serve.sh`, weights and GPU clock, and benched back to back with one harness
+(cold prompt: a unique first token defeats the prompt cache; decode: 256-token cap, temperature 0,
+3 reps, span from first to last streamed token).
+
+| measurement | `feat/glm53-rexl3` `2f01cde2e` (pre-rebase) | `rebase/1.3.1-glm53` `4f08e84ea` |
+|---|---|---|
+| prefill, 2.5k prompt | 876.5 tok/s | 874.5 tok/s |
+| prefill, 12k prompt | 948.8 tok/s | 945.3 tok/s |
+| decode, prose | 29.1 tok/s | 29.1 tok/s |
+| decode, code | 34.5 tok/s | 34.4 tok/s |
+| decode, math | 49.7 tok/s | 49.7 tok/s |
+| decode, JSON | 38.4 tok/s | 38.3 tok/s |
+| decode, French prose | 30.3 tok/s | 30.3 tok/s |
+| cold TTFT, 12k | 12.63 s | 12.63 s |
+| cached TTFT, 12k | 1.95 s (10,240 cached) | 1.95 s (10,240 cached) |
+
+**The rebase costs nothing measurable**: every figure is within ±0.3 %, i.e. inside run-to-run noise.
+Both pins report 1.3.1 as the served version, 638 KV pages, DFlash2 with 4 state copies, and load in
+~80 s.
+
+Two caveats. The decode figures above come from this repository's prompts, not from the window harness
+behind the 16 Nov table, so `code` and `JSON` are lower than 16 Nov simply because the generated text
+differs (draft acceptance follows the content) — the A/B line proves it is not a regression. And the
+prompt cache matches **blocks**, not just prefixes: with `TF_KV_SHARE=4` the rebased build reported
+10,240 cached tokens on the first call of a prompt it had seen with a different first line, where the
+pre-rebase build reported 0 and cached them only on the second call.
