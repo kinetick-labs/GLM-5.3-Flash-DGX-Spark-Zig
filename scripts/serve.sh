@@ -27,6 +27,8 @@ ENV=(
   TF_KV_SHARE="$KV_SHARE" TF_GLM_KV_LIVE_HALF=1 TF_GLM_HOST_CACHE=1 TENSORFOLD_PREFILL_POLICY=fcfs
 )
 E=(); for e in "${ENV[@]}"; do E+=(-e "$e"); done
+# EXTRA_ENV: space-separated KEY=VALUE knobs for a bench arm; empty in prod.
+for e in ${EXTRA_ENV:-}; do E+=(-e "$e"); done
 CMD=(docker run -d --name "$NAME" --gpus all --ipc=host --network host
      --ulimit memlock=-1 --ulimit stack=67108864 "${E[@]}"
      -v "$ROOT":/tfp:ro -v "$MODEL":/model:ro -v "$DFLASH":/dflash:ro
