@@ -1,18 +1,22 @@
-# GLM-5.3-Flash SAGE REXL3 2.48 bpw on one DGX Spark — TensorFold (kinetick-labs feat/glm53-rexl3)
+# GLM-5.3-Flash SAGE REXL3 2.48 bpw on one DGX Spark — TensorFold (kinetick-labs rebase/1.3.1-glm53)
 
 Serves **GLM-5.3-Flash SAGE REXL3 2.48 bpw** ([vcruz305/GLM-5.3-Flash-SAGE-REXL3-2.48bpw](https://huggingface.co/vcruz305/GLM-5.3-Flash-SAGE-REXL3-2.48bpw),
 rev `7d0de246`, a quantized pack of [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)) with
 **DFlash2 drafts** ([incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2), rev `6cc6c481`)
 on **one NVIDIA GB10** with the native Zig engine (`tensorfold-native`) of
 [kinetick-labs/TensorFold](https://github.com/kinetick-labs/TensorFold) branch
-[**`feat/glm53-rexl3` @ `2f01cde2e`**](https://github.com/kinetick-labs/TensorFold/tree/feat/glm53-rexl3): our `main`
-`082aee98a` (upstream [ashhart/TensorFold](https://github.com/ashhart/TensorFold) `d6c4cce60` / v1.2.8 + our engine
-work + Jay Leaton's compute lane) plus our GLM-5.3 REXL3 work (FP8 prompt experts, live-half kept states, conversation
-reuse on the paged KV, boot retry). `scripts/build.sh` pins it.
+[**`rebase/1.3.1-glm53` @ `4f08e84ea`**](https://github.com/kinetick-labs/TensorFold/tree/rebase/1.3.1-glm53): upstream
+[ashhart/TensorFold](https://github.com/ashhart/TensorFold) **v1.3.1** (`5e1e1912e`) plus our GLM-5.3 REXL3 work
+(FP8 prompt experts, live-half kept states, conversation reuse on the paged KV, boot retry). `scripts/build.sh` pins it.
 
-Status: tested on our Spark on port 8094 (container `glm53`); it is **not** our prod (prod is Qwen3.8 Flash-Next,
-[Qwen3.8-Flash-Next-DGX-Spark-Zig](https://github.com/kinetick-labs/Qwen3.8-Flash-Next-DGX-Spark-Zig)). The branch is
-not merged into our `main`.
+The branch carries the 24 GLM units alone: it does **not** include our `main`'s 209 Flash-Next/compute-lane units
+(the mia engine this rig never serves), so a GLM build stays independent of the `main` rebase. Before 2026-11-20 this
+rig pinned `feat/glm53-rexl3` @ `2f01cde2e` on our `main` `082aee98a` = upstream v1.2.8 `d6c4cce60`.
+
+Status: this is our **prod** model since 2026-11-16 — port `:8083`, container `glm53-prod`, user unit
+`glm53-tensorfold.service`, copy of the serve script at `~/tf-prod-glm53/serve.sh`. The Qwen3.8 Flash-Next rig
+([Qwen3.8-Flash-Next-DGX-Spark-Zig](https://github.com/kinetick-labs/Qwen3.8-Flash-Next-DGX-Spark-Zig)) is stopped and
+switched back with `~/switch-to-qwen.sh`.
 
 ## Configuration
 
@@ -34,6 +38,9 @@ Optional knobs on this branch: `TF_KV_SHARE_MIN_PROMPT=N` (prompts shorter than 
 not evict a long conversation's kept states; default 0), `KV_SHARE=2` in serve.sh (~0.4 GiB more margin).
 
 ## Measured (Spark GB10, 16 Nov 2026, this config; details in `bench/results.md`)
+
+These figures were taken on the previous pin (`feat/glm53-rexl3` @ `72d1c64c2`/`c18970d85`, upstream v1.2.8): they are
+**not re-measured on the v1.3.1 rebase** yet. Re-run `bench/` before quoting them against the new pin.
 
 - **Prefill** (FP8 experts): **968 tok/s** at 2.9k tokens, **1,009 tok/s** at 14k, ~1,000–1,026 tok/s on 120k–247k fills.
 - **Decode** (DFlash2, single stream, temperature 0): prose **29.9**, code **49.1**, math **54.3**, structured/JSON
@@ -100,7 +107,7 @@ hf download incoai/GLM-5.3-Flash-DFlash2 --revision 6cc6c481eee930a5139619ed919f
 ROOT=$HOME/tf-glm53-serve LIBS_FROM=/path/to/libs scripts/build.sh
 ```
 
-Builds `feat/glm53-rexl3` @ `2f01cde2e` ReleaseFast (Zig 0.17, CUDA nvcc, sm_121) and installs
+Builds `rebase/1.3.1-glm53` @ `4f08e84ea` ReleaseFast (Zig 0.17, CUDA nvcc, sm_121) and installs
 `bin/tensorfold-native`, `libs/` and `COMMIT` under `$ROOT`. **Grammar library:** serve.sh expects `libtfgrammar.so`
 (Linux aarch64) in `$ROOT/libs`: take it from a TensorFold release (pinned grammar runtime) or build it with
 `zig build grammar -Dxgrammar=DIR`; `libturbojpeg` / `libwebpdecoder` there serve image input.
@@ -124,7 +131,8 @@ The image (`image/Dockerfile`, multi-stage) is the same runtime as our Qwen reci
   kernel set that Qwen's mia engine replays. GLM serves vision in-engine (`--vision`) and uses neither.
   - Python package: upstream ashhart/TensorFold `4af95036e` plus `image/python-overlay.patch`, with transformers
     5.17.0 and PyAV 19.0.1.
-  - Kernel set: compiled without a GPU from the TensorFold `082aee98a` spec, every cubin checked against
+  - Kernel set: compiled without a GPU from the TensorFold `082aee98a` spec (our `main`'s mia-engine kernel spec, the
+    one this image was built and verified against), every cubin checked against
     `image/sm121-kernels.txt`.
 
 Checked on our Spark (2026-11-16) against the local image we served GLM with until now (`tensorfold-zig:exl3-572414d`):
@@ -189,7 +197,7 @@ the full attributions of the engine.
 
 **Engine and formats**
 - **TensorFold**: [ashhart](https://github.com/ashhart) and [contributors](https://github.com/ashhart/TensorFold/graphs/contributors)
-  ([ashhart/TensorFold](https://github.com/ashhart/TensorFold) v1.2.8 `d6c4cce60`, Apache-2.0): the native Zig/CUDA
+  ([ashhart/TensorFold](https://github.com/ashhart/TensorFold) v1.3.1 `5e1e1912e`, Apache-2.0): the native Zig/CUDA
   engine. The CUDA GLM family is mostly by ashhart, [Bizuayeu](https://github.com/Bizuayeu) and
   [BobClawblaw](https://github.com/BobClawblaw), with others (git history); the CUDA EXL3 linear and grouped expert
   kernels started with Justin Casey's work and were extended by ashhart, Anders Jensen-Waud and others.
