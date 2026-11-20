@@ -111,3 +111,57 @@ differs (draft acceptance follows the content) — the A/B line proves it is not
 prompt cache matches **blocks**, not just prefixes: with `TF_KV_SHARE=4` the rebased build reported
 10,240 cached tokens on the first call of a prompt it had seen with a different first line, where the
 pre-rebase build reported 0 and cached them only on the second call.
+
+## Knob sweep on the rebased build, 2100 MHz cap (2026-11-20)
+
+Every arm below is the same binary (`4f08e84ea`), weights, `serve.sh` and GPU clock (2080–2093 MHz),
+one restart apart; `TENSORFOLD_PREFILL_POLICY` stayed `fcfs` in every arm. 2 reps a point.
+
+**Draft and expert form — the defaults already win.** Nothing here beats the shipped configuration:
+
+| arm | prefill 2.5k | prefill 12k | prose | code | math | JSON | French |
+|---|---|---|---|---|---|---|---|
+| baseline (no extra knobs) | **877.5** | **950.8** | **29.2** | **34.5** | **49.8** | **38.4** | **30.3** |
+| `TF_GLM_DRAFT_ADAPT=1` | 874.1 | 946.9 | 28.6 | 34.2 | 49.0 | 37.6 | 30.0 |
+| + `DRAFT_CONFIDENCE=0.6` | 873.8 | 947.8 | 29.0 | 34.0 | 47.5 | 37.5 | 29.9 |
+| + `DRAFT_CONFIDENCE=0.8` | 876.5 | 948.5 | 28.4 | 33.9 | 48.8 | 37.4 | 29.8 |
+| + `DRAFT_CONFIDENCE=0.9` | 872.5 | 947.6 | 27.7 | 33.2 | 47.9 | 36.9 | 29.5 |
+| `DRAFT_ADAPT=1` + `EXPERT_FORM=factored` | 874.0 | 949.7 | 28.6 | 34.3 | 49.1 | 37.6 | 30.0 |
+
+Adaptive draft depth costs about 2 % here, and every confidence cut below or above the 0.7 default costs
+more: on this drafter and these prompts the fixed depth at 0.7 is already the best point. Naming the
+expert form changes nothing measurable, which says the first-load race lands on the same form either way.
+
+**Prompt-cache knobs — neutral.** A five-turn growing conversation (a 10.8k-token document, its TTFT
+summed) run twice an arm:
+
+| arm | TTFT sum, conversation 1 / 2 | cached on the last turn |
+|---|---|---|
+| baseline (`TF_KV_SHARE=4`, 1 GiB cache) | 25.8 / 26.2 s | 10,240 |
+| `TENSORFOLD_PROMPT_CACHE_KEEP_OTHERS=1` | 26.0 / 26.7 s | 10,240 |
+| `TF_KV_SHARE_MIN_PROMPT=512` | 26.5 / 25.6 s | 10,240 |
+| both | 25.7 / 28.6 s | 10,240 |
+
+The 10,240-token figure is the same in every arm and in every conversation: it is what one kept state
+covers here, not a knob's doing, so a longer prefix is re-prefilled past it whatever these settings say.
+
+**`--parallel 3` is the one real win, and it costs conversation reuse.** `tools/bench_concurrent.py`,
+256 tokens, temperature 0, 3 reps:
+
+| arm | code c2 | code c3 | chat c2 | chat c3 | worst TTFT at c3 |
+|---|---|---|---|---|---|
+| `--parallel 2` (shipped) | 66.8 | 52.6 | 54.1 | 42.5 | 7.98 s |
+| `--parallel 3`, `TF_KV_SHARE=4` | 67.0 | **86.7** | 54.3 | **70.9** | 0.50 s |
+| `--parallel 3`, `TF_KV_SHARE=6`, 2 GiB cache | — | 86.6 | — | 71.0 | 0.64 s |
+| `--parallel 3`, `TF_KV_SHARE=12`, 4 GiB cache | 66.7 | 86.4 | 54.3 | 70.7 | 0.50 s |
+
+Three streams instead of two: aggregate **+30 % against the best two-stream figure and +65 % against what
+three queued streams get today**, per stream −14 %, and the third request stops waiting 8 s. The cost is on
+the conversation side: reuse worsens from 26.0 s to 27.3 s with `TF_KV_SHARE=6`, and `TF_KV_SHARE=12` with a
+4 GiB cache — the pair the engine's own warning asks for — is far worse (26.7 s then **62.2 s**: twelve
+states in four GiB leave the second conversation nothing, so every one of its five turns re-prefills).
+The shipped `--parallel 2` is what prod runs; the three-stream trade is the owner's call, not a default.
+
+Reproduce an arm without editing `serve.sh`:
+
+    EXTRA_ENV="TF_GLM_DRAFT_ADAPT=1" bash scripts/serve.sh     # extra -e knobs, empty in prod
